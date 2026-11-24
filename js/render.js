@@ -23,17 +23,26 @@ export function applyGeom(ctx, img, imgScale, t, W, H) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-// Für starke Verkleinerung: schrittweise halbieren (bessere Qualität in Safari)
+// Für starke Verkleinerung: schrittweise halbieren (bessere Qualität in Safari).
+// Die Stufen werden pro Quellbild einmal berechnet und wiederverwendet (flüssige Gesten).
+const stepCache = new WeakMap();
 function stepDown(src, targetScale) {
-  let cur = src, scale = 1, n = 0;
-  while (targetScale / scale < 0.5 && n < 6) {
-    const c = work('step' + n, Math.max(1, Math.round(cur.width / 2)), Math.max(1, Math.round(cur.height / 2)));
-    const x = c.getContext('2d');
-    x.imageSmoothingQuality = 'high';
-    x.drawImage(cur, 0, 0, c.width, c.height);
-    scale *= c.width / cur.width; cur = c; n++;
+  let levels = stepCache.get(src);
+  if (!levels) { levels = [{ img: src, scale: 1 }]; stepCache.set(src, levels); }
+  let i = 0;
+  while (targetScale / levels[i].scale < 0.5 && i < 6) {
+    if (!levels[i + 1]) {
+      const cur = levels[i].img;
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(cur.width / 2)); c.height = Math.max(1, Math.round(cur.height / 2));
+      const x = c.getContext('2d');
+      x.imageSmoothingQuality = 'high';
+      x.drawImage(cur, 0, 0, c.width, c.height);
+      levels[i + 1] = { img: c, scale: c.width / src.width };
+    }
+    i++;
   }
-  return { img: cur, scale };
+  return levels[i];
 }
 
 export function hexToRgb(hex) {
@@ -41,7 +50,7 @@ export function hexToRgb(hex) {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function buildLut(brightness, contrast) {
+export function buildLut(brightness, contrast) {
   const lut = new Uint8ClampedArray(256);
   const c = contrast * 1.28;
   const f = (259 * (c + 255)) / (255 * (259 - c));
@@ -49,20 +58,39 @@ function buildLut(brightness, contrast) {
   return lut;
 }
 
+// Unscharf maskieren mit Radius relativ zur Bildhöhe:
+// Vorschau und Export sehen dadurch gleich scharf aus.
 function sharpen(img, amount) {
   const { width: W, height: H, data: d } = img;
-  const src = new Uint8ClampedArray(d);
-  const a = amount;
-  const row = W * 4;
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * row + x * 4;
-      for (let ch = 0; ch < 3; ch++) {
-        const p = i + ch;
-        const v = src[p] * (1 + 4 * a) - a * (src[p - 4] + src[p + 4] + src[p - row] + src[p + row]);
-        d[p] = v;
+  const r = Math.max(1, Math.round(H / 700));
+  const n = W * H;
+  const tmp = new Float32Array(n * 3), blur = new Float32Array(n * 3);
+  const win = 2 * r + 1;
+  for (let y = 0; y < H; y++) {
+    for (let ch = 0; ch < 3; ch++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += d[(y * W + Math.min(W - 1, Math.max(0, k))) * 4 + ch];
+      for (let x = 0; x < W; x++) {
+        tmp[(y * W + x) * 3 + ch] = acc / win;
+        const xo = Math.max(0, x - r), xi = Math.min(W - 1, x + r + 1);
+        acc += d[(y * W + xi) * 4 + ch] - d[(y * W + xo) * 4 + ch];
       }
     }
+  }
+  for (let x = 0; x < W; x++) {
+    for (let ch = 0; ch < 3; ch++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += tmp[(Math.min(H - 1, Math.max(0, k)) * W + x) * 3 + ch];
+      for (let y = 0; y < H; y++) {
+        blur[(y * W + x) * 3 + ch] = acc / win;
+        const yo = Math.max(0, y - r), yi = Math.min(H - 1, y + r + 1);
+        acc += tmp[(yi * W + x) * 3 + ch] - tmp[(yo * W + x) * 3 + ch];
+      }
+    }
+  }
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    if (d[i + 3] < 255) continue; // Bildrand: keine Säume
+    for (let ch = 0; ch < 3; ch++) d[i + ch] = d[i + ch] + amount * (d[i + ch] - blur[p * 3 + ch]);
   }
 }
 
@@ -86,7 +114,7 @@ export function renderPhoto(state, W, H, out) {
     m = mctx.getImageData(0, 0, W, H).data;
   }
   const img = actx.getImageData(0, 0, W, H);
-  if (adj.sharpen > 0) sharpen(img, adj.sharpen / 100 * 0.6);
+  if (adj.sharpen > 0) sharpen(img, adj.sharpen / 100 * 1.5);
 
   const d = img.data;
   const lut = buildLut(adj.brightness, adj.contrast);

@@ -101,7 +101,7 @@
       <div class="panel active" data-panel="crop">
         <p class="hint" data-i18n="dragHint"></p>
         <label class="slider"><span data-i18n="zoom"></span><input id="sZoom" type="range" min="40" max="250" step="1"><output></output></label>
-        <label class="slider"><span data-i18n="rotate"></span><input id="sRot" type="range" min="-20" max="20" step="0.1"><output></output></label>
+        <label class="slider"><span data-i18n="rotate"></span><input id="sRot" type="range" min="-20" max="20" step="0.1" value="0"><output></output></label>
         <div class="row">
           <button id="btnAuto2" class="btn small" data-i18n="autoAlign"></button>
           <label class="switch"><input id="tGuides" type="checkbox" checked><span data-i18n="guides"></span></label>
@@ -155,7 +155,9 @@
       <label><span data-i18n="gap"></span><input id="oGap" type="number" min="0" max="10" step="0.5" inputmode="decimal"></label>
       <label><span data-i18n="count"></span><select id="oCount"></select></label>
       <label class="switch"><input id="oCut" type="checkbox" checked><span data-i18n="cutLines"></span></label>
+      <label class="switch"><input id="oSafe" type="checkbox"><span data-i18n="safeMargin"></span></label>
     </div>
+    <p id="safeHint" class="hint warn-text" data-i18n="safeHint" hidden></p>
     <div class="export-actions">
       <button id="bShare" class="btn primary"><span>⤴</span> <span data-i18n="share"></span></button>
       <button id="bPhotoJpg" class="btn"><span>⬇</span> <span data-i18n="dlJpg"></span></button>

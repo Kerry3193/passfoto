@@ -1,8 +1,8 @@
 import { FORMATS, PAPERS, BG_COLORS, mmToPx } from './formats.js';
 import { t, getLang, setLang, applyI18n, RULES } from './i18n.js';
 import { initVision, initSegmenter, initVideo, detectFaces, detectVideo, segmentPerson } from './vision.js';
-import { renderPhoto } from './render.js';
-import { jpegWithDpi, makePdf, renderSheet, sheetLayout, downloadBlob, shareBlob, printAtSize, canvasToBlob } from './export.js';
+import { renderPhoto, buildLut, hexToRgb } from './render.js';
+import { jpegWithDpi, makePdf, renderSheet, sheetLayout, downloadBlob, saveFile, printAtSize, canvasToBlob, isIOS, isStandalone } from './export.js';
 import { addEntry, listEntries, removeEntry } from './db.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -18,8 +18,8 @@ const S = {
   adj: { ...DEFAULT_ADJ },
   bg: { replace: false, color: '#ffffff', feather: 0.3 },
   guides: true,
-  photo: null, photoFmt: null,
-  ex: { dpi: 600, paper: '10x15', gap: 0, count: 0, cut: true },
+  photo: null, photoFmt: null, photoId: 0, srcId: 0, histSrc: -1, histId: null,
+  ex: { dpi: 600, paper: '10x15', gap: 0, count: 0, cut: true, safe: false },
   facing: 'user', timer: 0, auto: false,
 };
 
@@ -32,6 +32,7 @@ function toast(msg, ms = 2600) {
 function busy(msg) { $('#busy').hidden = !msg; if (msg) $('#busyText').textContent = msg; }
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ROT_LIMIT = 20 * Math.PI / 180; // max. Drehung relativ zur automatischen Ausrichtung
 const fmtName = f => f.name[getLang()] || f.name.de;
 const fmtSize = f => `${+f.w.toFixed(1)} × ${+f.h.toFixed(1)} mm`;
 
@@ -123,6 +124,8 @@ function toCanvas(drawable, w, h, max) {
 }
 async function loadFile(file) {
   if (!file) return;
+  const fromCam = stack[stack.length - 1] === 'camera';
+  if (fromCam) stopCamera();
   busy(t('analyzing'));
   try {
     const url = URL.createObjectURL(file);
@@ -132,14 +135,15 @@ async function loadFile(file) {
     setSource(img, img.naturalWidth, img.naturalHeight);
     URL.revokeObjectURL(url);
     await analyze();
-    if (stack[stack.length - 1] === 'camera') { stopCamera(); go('editor', { replace: true }); }
-    else go('editor');
+    go('editor', { replace: fromCam });
   } catch (e) {
     console.error(e); busy(null); toast(e.message || String(e));
+    if (fromCam && stack[stack.length - 1] === 'camera') openStream();
   }
 }
 function setSource(drawable, w, h) {
   S.src = toCanvas(drawable, w, h, 3200);
+  S.srcId++;
   S.small = toCanvas(S.src, S.src.width, S.src.height, 1024);
   S.smallScale = S.src.width / S.small.width;
 }
@@ -289,6 +293,27 @@ function autoFit() {
   requestRender();
 }
 
+// Normierte Fotokoordinate (0..1) -> Quellkoordinate
+function toSrc(nx, ny) {
+  const { cx, cy, span, rot } = S.t;
+  const ox = (nx - 0.5) * span * S.format.w / S.format.h, oy = (ny - 0.5) * span;
+  const c = Math.cos(rot), s = Math.sin(rot);
+  return { x: cx + c * ox + s * oy, y: cy - s * ox + c * oy };
+}
+// Welche Fotokanten liegen außerhalb des Originalbildes (leere Flächen)?
+function uncoveredEdges() {
+  const W = S.src.width, H = S.src.height, out = { top: false, bottom: false, left: false, right: false };
+  const inside = p => p.x >= -1 && p.y >= -1 && p.x <= W + 1 && p.y <= H + 1;
+  for (let i = 0; i <= 10; i++) {
+    const q = i / 10;
+    if (!inside(toSrc(q, 0))) out.top = true;
+    if (!inside(toSrc(q, 1))) out.bottom = true;
+    if (!inside(toSrc(0, q))) out.left = true;
+    if (!inside(toSrc(1, q))) out.right = true;
+  }
+  return out;
+}
+
 // Quellkoordinate -> normierte Fotokoordinate (0..1)
 function toOut(p) {
   const { cx, cy, span, rot } = S.t;
@@ -375,7 +400,7 @@ frame.addEventListener('pointermove', e => {
     if (d0 > 10 && d1 > 10) S.t.span = clamp(S.t.span * d0 / d1, S.autoSpan * 0.4, S.autoSpan * 2.5);
     let da = ang1 - ang0;
     if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI;
-    S.t.rot = clamp(S.t.rot + da, S.autoRot - 0.35, S.autoRot + 0.35);
+    S.t.rot = clamp(S.t.rot + da, S.autoRot - ROT_LIMIT, S.autoRot + ROT_LIMIT);
     dx = ((a1.x + b1.x) - (a0.x + b0.x)) / 2; dy = ((a1.y + b1.y) - (a0.y + b0.y)) / 2;
   } else {
     dx = e.clientX - old.x; dy = e.clientY - old.y;
@@ -400,8 +425,8 @@ function setOut(input, txt) { const o = input.parentElement.querySelector('outpu
 function syncCropSliders() {
   const z = $('#sZoom'), r = $('#sRot');
   z.value = Math.round(100 * S.autoSpan / S.t.span); setOut(z, z.value + '%');
-  const deg = S.t.rot * 180 / Math.PI;
-  r.value = deg.toFixed(1); setOut(r, deg.toFixed(1) + '°');
+  const deg = (S.t.rot - S.autoRot) * 180 / Math.PI;
+  r.value = deg.toFixed(1); setOut(r, (deg > 0 ? '+' : '') + deg.toFixed(1) + '°');
 }
 function syncControls() {
   syncCropSliders();
@@ -414,7 +439,11 @@ function syncControls() {
   renderSwatches();
 }
 $('#sZoom').addEventListener('input', e => { S.t.span = S.autoSpan * 100 / +e.target.value; setOut(e.target, e.target.value + '%'); requestRender(); });
-$('#sRot').addEventListener('input', e => { S.t.rot = +e.target.value * Math.PI / 180; setOut(e.target, (+e.target.value).toFixed(1) + '°'); requestRender(); });
+$('#sRot').addEventListener('input', e => {
+  const v = +e.target.value;
+  S.t.rot = S.autoRot + v * Math.PI / 180;
+  setOut(e.target, (v > 0 ? '+' : '') + v.toFixed(1) + '°'); requestRender();
+});
 $('#btnAuto2').onclick = () => { autoFit(); syncCropSliders(); };
 $('#tGuides').onchange = e => { S.guides = e.target.checked; requestRender(); };
 $('#tBg').onchange = e => { S.bg.replace = e.target.checked; requestRender(); };
@@ -484,12 +513,22 @@ function computeChecks() {
       add('chkMouth', (b.jawOpen || 0) < 0.12 && smile < 0.45 ? 'ok' : 'warn');
     }
     if (S.light) {
-      const bright = S.light.mean * (1 + S.adj.brightness / 100);
+      const bright = buildLut(S.adj.brightness, S.adj.contrast)[clamp(Math.round(S.light.mean), 0, 255)];
       add('chkExposure', bright > 95 && bright < 215 ? 'ok' : 'warn', Math.round(bright) + ' / 255');
       add('chkLight', S.light.balance < 0.15 ? 'ok' : S.light.balance < 0.28 ? 'warn' : 'bad', Math.round(S.light.balance * 100) + ' %');
     }
   }
-  if (S.bg.replace && S.mask) add('chkBg', 'ok', '✓ ' + S.bg.color);
+  if (S.src) {
+    const miss = uncoveredEdges();
+    const bad = miss.bottom || (!(S.bg.replace && S.mask) && (miss.top || miss.left || miss.right));
+    add('chkFill', bad ? 'bad' : 'ok');
+  }
+  if (S.bg.replace && S.mask) {
+    const [r, g, b] = hexToRgb(S.bg.color), [R, G, B] = hexToRgb(fmt.bg);
+    const diff = Math.max(Math.abs(r - R), Math.abs(g - G), Math.abs(b - B));
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b, sat = Math.max(r, g, b) - Math.min(r, g, b);
+    add('chkBg', diff <= 12 ? 'ok' : (lum >= 215 && sat <= 30 ? 'warn' : 'bad'), `${S.bg.color} (${t('bgExpected')} ${fmt.bg})`);
+  }
   else if (S.bgStat) add('chkBg', S.bgStat.mean > 175 && S.bgStat.std < 28 ? 'ok' : 'warn', `Ø ${Math.round(S.bgStat.mean)}, σ ${Math.round(S.bgStat.std)}`);
   if (S.src) {
     const dpi = S.t.span / (fmt.h / 25.4);
@@ -524,7 +563,7 @@ async function startCamera() {
   $('#camHint').className = 'cam-hint';
   await openStream();
 }
-async function openStream() {
+async function openStream(prevFacing) {
   stopStream();
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('no getUserMedia');
@@ -539,6 +578,11 @@ async function openStream() {
     camLoop = requestAnimationFrame(camTick);
   } catch (e) {
     console.error(e);
+    if (prevFacing && prevFacing !== S.facing) {
+      S.facing = prevFacing;
+      toast(t('camSwitchFail'));
+      return openStream();
+    }
     toast(t('camError'), 4000);
     if (stack[stack.length - 1] === 'camera') history.back();
   }
@@ -655,14 +699,15 @@ $('#btnTimer').onclick = () => {
   $('#timerLabel').textContent = S.timer + 's';
 };
 $('#btnAuto').onclick = () => { S.auto = !S.auto; $('#btnAuto').setAttribute('aria-pressed', S.auto); goodSince = 0; };
-$('#btnFlip').onclick = () => { S.facing = S.facing === 'user' ? 'environment' : 'user'; openStream(); };
+$('#btnFlip').onclick = () => { const prev = S.facing; S.facing = prev === 'user' ? 'environment' : 'user'; openStream(prev); };
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopStream();
   else if (stack[stack.length - 1] === 'camera' && !stream) openStream();
 });
 
 // ---------- Export ----------
-let exportTimer = 0, sheetUrl = null, photoUrl = null;
+let exportTimer = 0, sheetUrl = null, photoUrl = null, prep = null;
+function setPhoto(c, fmt) { S.photo = c; S.photoFmt = fmt; S.photoId++; prep = null; }
 function photoAtDpi(dpi) {
   const fmt = S.photoFmt;
   const W = mmToPx(fmt.w, dpi), H = mmToPx(fmt.h, dpi);
@@ -674,36 +719,44 @@ function photoAtDpi(dpi) {
 async function enterExport() {
   busy(t('analyzing')); await nextFrame();
   const fmt = { ...S.format };
-  const c = document.createElement('canvas');
-  renderPhoto(S, mmToPx(fmt.w, 600), mmToPx(fmt.h, 600), c);
-  S.photo = c; S.photoFmt = fmt;
+  try {
+    const c = document.createElement('canvas');
+    renderPhoto(S, mmToPx(fmt.w, 600), mmToPx(fmt.h, 600), c);
+    setPhoto(c, fmt);
+  } catch (e) { console.error(e); busy(null); toast(e.message || String(e)); return; }
   busy(null);
   go('export');
   await updateExport();
+  // Pro Ausgangsfoto genau ein Verlaufseintrag (wird bei erneutem „Weiter“ aktualisiert)
   try {
-    const blob = await jpegWithDpi(c, 600, 0.93);
+    if (S.histSrc !== S.srcId) { S.histSrc = S.srcId; S.histId = Date.now() + '-' + Math.random().toString(36).slice(2, 7); }
+    const blob = await jpegWithDpi(S.photo, 600, 0.93);
     const th = document.createElement('canvas'); th.width = 150; th.height = Math.round(150 * fmt.h / fmt.w);
-    th.getContext('2d').drawImage(c, 0, 0, th.width, th.height);
-    await addEntry({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), date: Date.now(), fmt, buf: await blob.arrayBuffer(), thumb: th.toDataURL('image/jpeg', 0.8) });
+    th.getContext('2d').drawImage(S.photo, 0, 0, th.width, th.height);
+    await addEntry({ id: S.histId, date: Date.now(), fmt, buf: await blob.arrayBuffer(), thumb: th.toDataURL('image/jpeg', 0.8) });
     toast(t('saved'));
   } catch (e) { console.warn('history', e); }
 }
 function paper() { return PAPERS.find(p => p.id === S.ex.paper) || PAPERS[0]; }
 function sheetOpts() {
   const fmt = S.photoFmt;
-  return { dpi: S.ex.dpi, gap: S.ex.gap, count: S.ex.count, cutLines: S.ex.cut, label: `${fmtSize(fmt)} · ${getLang() === 'tr' ? '%100 boyutta yazdırın' : 'in 100 % drucken'}` };
+  return { dpi: S.ex.dpi, gap: S.ex.gap, count: S.ex.count, cutLines: S.ex.cut, safe: S.ex.safe, label: `${fmtSize(fmt)} · ${getLang() === 'tr' ? '%100 boyutta yazdırın' : 'in 100 % drucken'}` };
 }
+const layoutNow = () => sheetLayout(S.photoFmt, paper(), S.ex.gap, S.ex.safe);
 async function updateExport() {
   const fmt = S.photoFmt;
-  // Optionen füllen
   const ps = $('#oPaper');
   if (!ps.options.length) PAPERS.forEach(p => ps.add(new Option(p.name, p.id)));
-  ps.value = S.ex.paper; $('#oDpi').value = S.ex.dpi; $('#oGap').value = S.ex.gap; $('#oCut').checked = S.ex.cut;
-  const L = sheetLayout(fmt, paper(), S.ex.gap);
+  ps.value = S.ex.paper; $('#oDpi').value = S.ex.dpi; $('#oGap').value = S.ex.gap;
+  $('#oCut').checked = S.ex.cut; $('#oSafe').checked = S.ex.safe;
+  const L = layoutNow();
+  const fits = L.n > 0;
   const cs = $('#oCount'); cs.innerHTML = '';
   for (let i = 1; i <= Math.max(1, L.n); i++) cs.add(new Option(i, i));
   if (!S.ex.count || S.ex.count > L.n) S.ex.count = L.n;
-  cs.value = S.ex.count;
+  cs.value = Math.max(1, S.ex.count);
+  cs.disabled = !fits;
+  ['#bSheetJpg', '#bSheetPdf', '#bPrint'].forEach(b => { $(b).disabled = !fits; });
 
   const photo = photoAtDpi(S.ex.dpi);
   if (photoUrl) URL.revokeObjectURL(photoUrl);
@@ -711,11 +764,49 @@ async function updateExport() {
   $('#exPhoto').src = photoUrl;
   $('#exPhotoMeta').textContent = `${fmtSize(fmt)} · ${photo.width}×${photo.height} px · ${S.ex.dpi} dpi`;
 
-  const sh = renderSheet(photo, fmt, paper(), { ...sheetOpts(), dpi: 150 });
-  if (sheetUrl) URL.revokeObjectURL(sheetUrl);
-  sheetUrl = URL.createObjectURL(await canvasToBlob(sh.canvas, 'image/jpeg', 0.85));
-  $('#exSheet').src = sheetUrl;
-  $('#exSheetMeta').textContent = `${paper().name} · ${t('photosPerSheet', { n: sh.n })}`;
+  if (sheetUrl) { URL.revokeObjectURL(sheetUrl); sheetUrl = null; }
+  if (fits) {
+    const sh = renderSheet(photo, fmt, paper(), { ...sheetOpts(), dpi: 150 });
+    sheetUrl = URL.createObjectURL(await canvasToBlob(sh.canvas, 'image/jpeg', 0.85));
+    $('#exSheet').src = sheetUrl;
+    $('#exSheet').hidden = false;
+    $('#exSheetMeta').textContent = `${paper().name} · ${t('photosPerSheet', { n: sh.n })}`;
+    const edge = Math.min((sh.pageW - (L.cols * fmt.w + (L.cols - 1) * S.ex.gap)) / 2, (sh.pageH - (L.rows * fmt.h + (L.rows - 1) * S.ex.gap)) / 2);
+    $('#safeHint').hidden = S.ex.safe || edge >= 2;
+  } else {
+    $('#exSheet').hidden = true;
+    $('#exSheetMeta').textContent = t('noFit');
+    $('#safeHint').hidden = true;
+  }
+  // Dateien im Hintergrund vorbereiten, damit Teilen/Speichern sofort (innerhalb der Nutzergeste) startet
+  prepareFiles().catch(e => console.warn('prepare', e));
+}
+function exportKey() { return JSON.stringify([S.photoId, S.ex, getLang()]); }
+function prepareFiles() {
+  const key = exportKey();
+  if (prep && prep.key === key) return prep.promise;
+  const p = { key, ready: null };
+  p.promise = (async () => {
+    await nextFrame();
+    const photoC = photoAtDpi(S.ex.dpi);
+    const photo = await jpegWithDpi(photoC, S.ex.dpi);
+    let sheet = null, pdf = null, page = null;
+    if (layoutNow().n > 0) {
+      const sh = renderSheet(photoC, S.photoFmt, paper(), sheetOpts());
+      sheet = await jpegWithDpi(sh.canvas, S.ex.dpi, 0.93);
+      pdf = await makePdf(sheet, sh.canvas.width, sh.canvas.height, sh.pageW, sh.pageH);
+      page = { w: sh.pageW, h: sh.pageH };
+    }
+    p.ready = { photo, sheet, pdf, page };
+    return p.ready;
+  })();
+  prep = p;
+  return p.promise;
+}
+async function getFiles() {
+  if (prep && prep.key === exportKey() && prep.ready) return prep.ready; // schneller Weg: Nutzergeste bleibt erhalten
+  busy(t('preparing'));
+  try { return await prepareFiles(); } finally { busy(null); }
 }
 function scheduleExport() { clearTimeout(exportTimer); exportTimer = setTimeout(updateExport, 120); }
 $('#oDpi').onchange = e => { S.ex.dpi = +e.target.value; localStorage.setItem('pf-dpi', S.ex.dpi); scheduleExport(); };
@@ -723,34 +814,29 @@ $('#oPaper').onchange = e => { S.ex.paper = e.target.value; S.ex.count = 0; loca
 $('#oGap').onchange = e => { S.ex.gap = clamp(+e.target.value || 0, 0, 10); S.ex.count = 0; scheduleExport(); };
 $('#oCount').onchange = e => { S.ex.count = +e.target.value; scheduleExport(); };
 $('#oCut').onchange = e => { S.ex.cut = e.target.checked; scheduleExport(); };
+$('#oSafe').onchange = e => { S.ex.safe = e.target.checked; S.ex.count = 0; localStorage.setItem('pf-safe', S.ex.safe ? '1' : ''); scheduleExport(); };
 
 const baseName = () => `passfoto_${S.photoFmt.id}_${S.photoFmt.w}x${S.photoFmt.h}mm`;
-async function photoBlob() { return jpegWithDpi(photoAtDpi(S.ex.dpi), S.ex.dpi); }
-async function sheetData() {
-  busy(t('analyzing')); await nextFrame();
-  try {
-    const sh = renderSheet(photoAtDpi(S.ex.dpi), S.photoFmt, paper(), sheetOpts());
-    const blob = await jpegWithDpi(sh.canvas, S.ex.dpi, 0.93);
-    return { blob, sh };
-  } finally { busy(null); }
-}
-$('#bPhotoJpg').onclick = async () => { downloadBlob(await photoBlob(), baseName() + `_${S.ex.dpi}dpi.jpg`); toast(t('downloaded')); };
-$('#bSheetJpg').onclick = async () => { const { blob } = await sheetData(); downloadBlob(blob, baseName() + `_${S.ex.paper}.jpg`); toast(t('downloaded')); };
-$('#bSheetPdf').onclick = async () => {
-  const { blob, sh } = await sheetData();
-  const pdf = await makePdf(blob, sh.canvas.width, sh.canvas.height, sh.pageW, sh.pageH);
-  downloadBlob(pdf, baseName() + `_${S.ex.paper}.pdf`); toast(t('downloaded'));
-};
+const done = ok => { if (ok) toast(t('downloaded')); };
+$('#bPhotoJpg').onclick = async () => { const f = await getFiles(); done(await saveFile(f.photo, baseName() + `_${S.ex.dpi}dpi.jpg`)); };
+$('#bSheetJpg').onclick = async () => { const f = await getFiles(); if (f.sheet) done(await saveFile(f.sheet, baseName() + `_${S.ex.paper}.jpg`)); };
+$('#bSheetPdf').onclick = async () => { const f = await getFiles(); if (f.pdf) done(await saveFile(f.pdf, baseName() + `_${S.ex.paper}.pdf`)); };
 $('#bShare').onclick = async () => {
-  const { blob } = await sheetData();
-  const photo = await photoBlob();
-  const files = [new File([photo], baseName() + '.jpg', { type: 'image/jpeg' }), new File([blob], baseName() + `_${S.ex.paper}.jpg`, { type: 'image/jpeg' })];
-  if (navigator.canShare?.({ files })) {
-    try { await navigator.share({ files, title: 'PassFoto' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  const f = await getFiles();
+  const files = [new File([f.photo], baseName() + '.jpg', { type: 'image/jpeg' })];
+  if (f.sheet) files.push(new File([f.sheet], baseName() + `_${S.ex.paper}.jpg`, { type: 'image/jpeg' }));
+  for (const set of [files, files.slice(0, 1)]) {
+    if (navigator.canShare?.({ files: set })) {
+      try { await navigator.share({ files: set, title: 'PassFoto' }); return; }
+      catch (e) { if (e.name === 'AbortError') return; console.warn('share', e); }
+    }
   }
-  if (!(await shareBlob(photo, baseName() + '.jpg', 'PassFoto'))) { downloadBlob(photo, baseName() + '.jpg'); toast(t('shareFail'), 3500); }
+  downloadBlob(f.photo, baseName() + '.jpg'); toast(t('shareFail'), 3500);
 };
-$('#bPrint').onclick = async () => { const { blob, sh } = await sheetData(); printAtSize(blob, sh.pageW, sh.pageH); };
+$('#bPrint').onclick = async () => {
+  const f = await getFiles();
+  if (f.sheet) printAtSize(f.sheet, f.pdf, f.page.w, f.page.h, baseName() + `_${S.ex.paper}.pdf`);
+};
 $('#bNew').onclick = () => { if (stack.length > 1) history.go(-(stack.length - 1)); };
 
 // ---------- Verlauf ----------
@@ -771,7 +857,7 @@ async function renderHistory() {
       const img = new Image(); const url = URL.createObjectURL(it.blob || new Blob([it.buf], { type: 'image/jpeg' })); img.src = url; await img.decode();
       const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
       c.getContext('2d').drawImage(img, 0, 0); URL.revokeObjectURL(url);
-      S.photo = c; S.photoFmt = it.fmt;
+      setPhoto(c, it.fmt);
       go('export'); updateExport();
     };
     d.querySelector('img').onclick = open;
@@ -795,9 +881,7 @@ $('#btnLang').onclick = () => { setLang(getLang() === 'de' ? 'tr' : 'de'); refre
 
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#btnInstall').hidden = false; });
-const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-if (isIOS && !standalone) $('#btnInstall').hidden = false;
+if (isIOS && !isStandalone) $('#btnInstall').hidden = false;
 $('#btnInstall').onclick = async () => {
   if (installEvt) { installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('#btnInstall').hidden = true; }
   else toast(getLang() === 'tr' ? 'Safari’de „Paylaş“ → „Ana Ekrana Ekle“ seçin' : 'In Safari „Teilen“ → „Zum Home-Bildschirm“ wählen', 5000);
@@ -809,6 +893,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 // ---------- Start ----------
 S.ex.dpi = +localStorage.getItem('pf-dpi') || 600;
 S.ex.paper = localStorage.getItem('pf-paper') || '10x15';
+S.ex.safe = localStorage.getItem('pf-safe') === '1';
 selectFormat(localStorage.getItem('pf-format') || 'tr');
 history.replaceState({ s: 'home' }, '');
 refreshLang();

@@ -156,3 +156,5 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 28px; }
 .panels { padding-bottom: 24px; }
 .bottom-bar { margin: 0 -14px; padding-left: 14px; padding-right: 14px; }
 .editor-screen .preview-area { position: sticky; top: calc(58px + var(--safe-t)); z-index: 5; background: var(--bg); margin: 0 -14px; padding-left: 14px; padding-right: 14px; }
+.warn-text { color: var(--warn); }
+.btn:disabled { opacity: .45; pointer-events: none; }

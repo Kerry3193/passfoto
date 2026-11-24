@@ -1,5 +1,5 @@
 // Offline-Cache: App-Dateien beim Installieren, KI-Modelle beim ersten Gebrauch
-const VERSION = 'passfoto-v1';
+const VERSION = 'passfoto-v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/formats.js', 'js/i18n.js', 'js/vision.js', 'js/render.js', 'js/export.js', 'js/db.js',

@@ -52,10 +52,11 @@ export async function makePdf(jpegBlob, pxW, pxH, pageWmm, pageHmm) {
 }
 
 // Berechnet das beste Raster (Hoch- oder Querformat) für den Druckbogen
-export function sheetLayout(fmt, paper, gap) {
+// safe: 3 mm Sicherheitsrand, weil Fotoautomaten beim randlosen Druck die Kanten beschneiden
+export function sheetLayout(fmt, paper, gap, safe = false) {
   const best = [paper.w, paper.h].map((_, rot) => {
     const pw = rot ? paper.h : paper.w, ph = rot ? paper.w : paper.h;
-    const m = paper.margin;
+    const m = safe ? Math.max(paper.margin, 3) : paper.margin;
     const cols = Math.max(0, Math.floor((pw - 2 * m + gap) / (fmt.w + gap)));
     const rows = Math.max(0, Math.floor((ph - 2 * m + gap) / (fmt.h + gap)));
     return { pw, ph, cols, rows, n: cols * rows };
@@ -64,8 +65,8 @@ export function sheetLayout(fmt, paper, gap) {
 }
 
 export function renderSheet(photo, fmt, paper, opts) {
-  const { dpi, gap, count, cutLines, label } = opts;
-  const L = sheetLayout(fmt, paper, gap);
+  const { dpi, gap, count, cutLines, label, safe } = opts;
+  const L = sheetLayout(fmt, paper, gap, safe);
   const W = mmToPx(L.pw, dpi), H = mmToPx(L.ph, dpi);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -74,7 +75,7 @@ export function renderSheet(photo, fmt, paper, opts) {
   const px = mm => (mm / 25.4) * dpi;
   const gw = L.cols * fmt.w + (L.cols - 1) * gap, gh = L.rows * fmt.h + (L.rows - 1) * gap;
   const ox = (L.pw - gw) / 2, oy = (L.ph - gh) / 2;
-  const n = Math.min(count || L.n, L.n);
+  const n = Math.max(0, Math.min(count || L.n, L.n));
   ctx.imageSmoothingQuality = 'high';
   let k = 0;
   for (let r = 0; r < L.rows; r++) for (let col = 0; col < L.cols; col++) {
@@ -138,9 +139,42 @@ export async function shareBlob(blob, name, title) {
   return false;
 }
 
-// Drucken in Originalgröße über ein verstecktes iframe
-export function printAtSize(blob, wmm, hmm) {
-  const url = URL.createObjectURL(blob);
+export const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+export const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+// Speichern: In der installierten iOS-App funktionieren Downloads nicht zuverlässig -> Teilen-Dialog
+// („In Fotos sichern“ / „In Dateien sichern“). Muss ohne vorheriges await aufgerufen werden.
+export function saveFile(blob, name) {
+  if (isIOS && isStandalone) {
+    const file = new File([blob], name, { type: blob.type });
+    if (navigator.canShare?.({ files: [file] })) {
+      return navigator.share({ files: [file] }).then(() => true, e => {
+        if (e.name === 'AbortError') return true;
+        downloadBlob(blob, name); return false;
+      });
+    }
+  }
+  downloadBlob(blob, name);
+  return Promise.resolve(true);
+}
+
+// Drucken in Originalgröße.
+// iOS druckt aus einem iframe heraus die ganze Seite -> dort das PDF über den
+// Teilen-Dialog anbieten (enthält „Drucken“), sonst das PDF öffnen.
+export function printAtSize(jpgBlob, pdfBlob, wmm, hmm, pdfName = 'passfoto.pdf') {
+  if (isIOS) {
+    const file = new File([pdfBlob], pdfName, { type: 'application/pdf' });
+    if (navigator.canShare?.({ files: [file] })) {
+      navigator.share({ files: [file] }).catch(() => {});
+      return;
+    }
+    const url = URL.createObjectURL(pdfBlob);
+    const w = window.open(url, '_blank');
+    if (!w) location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+    return;
+  }
+  const url = URL.createObjectURL(jpgBlob);
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.appendChild(f);

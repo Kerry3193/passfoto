@@ -70,6 +70,13 @@ const DICT = {
     downloaded: 'Gespeichert',
     shareFail: 'Teilen wird auf diesem Gerät nicht unterstützt – Datei wurde heruntergeladen.',
     offlineReady: 'App ist jetzt offline verfügbar',
+    chkFill: 'Foto füllt den Rahmen aus (keine leeren Ränder)',
+    bgExpected: 'erwartet',
+    noFit: 'Format passt nicht auf dieses Papier – größeres Papier wählen',
+    safeMargin: 'Sicherheitsrand 3 mm',
+    safeHint: 'Sehr schmaler Rand: Fotoautomaten schneiden beim randlosen Druck oft 1–3 mm ab. Aktiviere „Sicherheitsrand“, falls die Fotos am Rand beschnitten werden.',
+    camSwitchFail: 'Andere Kamera nicht verfügbar',
+    preparing: 'Dateien werden vorbereitet…',
   },
   tr: {
     appTitle: 'PassFoto',
@@ -138,6 +145,13 @@ const DICT = {
     downloaded: 'Kaydedildi',
     shareFail: 'Bu cihazda paylaşım desteklenmiyor – dosya indirildi.',
     offlineReady: 'Uygulama artık çevrimdışı kullanılabilir',
+    chkFill: 'Fotoğraf çerçeveyi dolduruyor (boş kenar yok)',
+    bgExpected: 'beklenen',
+    noFit: 'Format bu kâğıda sığmıyor – daha büyük kâğıt seçin',
+    safeMargin: 'Güvenlik kenarı 3 mm',
+    safeHint: 'Çok dar kenar: Baskı makineleri kenarsız baskıda genellikle 1–3 mm keser. Fotoğraflar kenardan kesiliyorsa „Güvenlik kenarı“nı açın.',
+    camSwitchFail: 'Diğer kamera kullanılamıyor',
+    preparing: 'Dosyalar hazırlanıyor…',
   },
 };
 
