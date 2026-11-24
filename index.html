@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<meta name="description" content="Biometrische Passfotos am Handy erstellen – Türkei 50×60 mm, EU, USA und mehr.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PassFoto">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>PassFoto</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <button id="btnBack" class="icon-btn" hidden data-i18n-title="back">
+    <svg viewBox="0 0 24 24" width="24" height="24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <h1 id="title"><span class="logo">▣</span> PassFoto</h1>
+  <div class="top-actions">
+    <button id="btnInstall" class="chip" hidden data-i18n="install"></button>
+    <button id="btnLang" class="chip" aria-label="Sprache / Dil">DE</button>
+  </div>
+</header>
+
+<main>
+  <!-- START -->
+  <section id="screen-home" class="screen active">
+    <h2 data-i18n="chooseFormat"></h2>
+    <div id="formatList" class="format-list" role="radiogroup"></div>
+
+    <div id="customBox" class="card custom-box" hidden>
+      <label><span data-i18n="customW"></span><input id="cW" type="number" min="10" max="200" step="0.5" inputmode="decimal"></label>
+      <label><span data-i18n="customH"></span><input id="cH" type="number" min="10" max="200" step="0.5" inputmode="decimal"></label>
+      <label><span data-i18n="customHead"></span><input id="cHead" type="number" min="30" max="90" step="1" inputmode="numeric"></label>
+    </div>
+
+    <div class="start-actions">
+      <button id="btnCamera" class="btn primary big">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        <span data-i18n="takePhoto"></span>
+      </button>
+      <label class="btn big">
+        <svg viewBox="0 0 24 24" width="22" height="22"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 16l5-5 4 4 3-3 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <span data-i18n="fromGallery"></span>
+        <input id="fileInput" type="file" accept="image/*" hidden>
+      </label>
+    </div>
+
+    <details class="card tips" id="tips">
+      <summary data-i18n="tipsTitle"></summary>
+      <ul id="rulesList"></ul>
+    </details>
+
+    <button id="btnHistory" class="btn ghost wide">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-i18n="history"></span>
+    </button>
+    <p class="privacy">🔒 <span data-i18n="privacy"></span></p>
+  </section>
+
+  <!-- KAMERA -->
+  <section id="screen-camera" class="screen camera-screen">
+    <div class="cam-wrap" id="camWrap">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="camOverlay"></canvas>
+      <div id="camHint" class="cam-hint"></div>
+      <div id="countdown" class="countdown" hidden></div>
+      <div id="flash" class="flash"></div>
+    </div>
+    <div class="cam-controls">
+      <button id="btnTimer" class="cam-side" aria-label="Timer"><span class="ico">⏱</span><span id="timerLabel">0s</span></button>
+      <button id="btnAuto" class="cam-side" aria-pressed="false"><span class="ico">A</span><span data-i18n="autoShot"></span></button>
+      <button id="btnShutter" class="shutter" aria-label="Foto aufnehmen"></button>
+      <button id="btnFlip" class="cam-side" data-i18n-title="switchCam"><span class="ico">⟲</span><span>1×</span></button>
+      <label class="cam-side"><span class="ico">🖼</span><input id="fileInput2" type="file" accept="image/*" hidden><span data-i18n="fromGallery" class="tiny"></span></label>
+    </div>
+  </section>
+
+  <!-- EDITOR -->
+  <section id="screen-editor" class="screen editor-screen">
+    <div class="preview-area" id="previewArea">
+      <div class="preview-frame" id="previewFrame">
+        <canvas id="preview"></canvas>
+        <canvas id="guides"></canvas>
+      </div>
+      <div class="dims" id="dims"></div>
+    </div>
+    <button id="checkSummary" class="check-summary"></button>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="crop" data-i18n="tabCrop"></button>
+      <button class="tab" data-tab="bg" data-i18n="tabBg"></button>
+      <button class="tab" data-tab="adjust" data-i18n="tabAdjust"></button>
+      <button class="tab" data-tab="check" data-i18n="tabCheck"></button>
+    </nav>
+    <div class="panels">
+      <div class="panel active" data-panel="crop">
+        <p class="hint" data-i18n="dragHint"></p>
+        <label class="slider"><span data-i18n="zoom"></span><input id="sZoom" type="range" min="40" max="250" step="1"><output></output></label>
+        <label class="slider"><span data-i18n="rotate"></span><input id="sRot" type="range" min="-20" max="20" step="0.1"><output></output></label>
+        <div class="row">
+          <button id="btnAuto2" class="btn small" data-i18n="autoAlign"></button>
+          <label class="switch"><input id="tGuides" type="checkbox" checked><span data-i18n="guides"></span></label>
+        </div>
+      </div>
+      <div class="panel" data-panel="bg">
+        <label class="switch"><input id="tBg" type="checkbox"><span data-i18n="replaceBg"></span></label>
+        <div class="swatches" id="swatches"></div>
+        <label class="slider"><span data-i18n="edge"></span><input id="sEdge" type="range" min="2" max="80" step="1"><output></output></label>
+      </div>
+      <div class="panel" data-panel="adjust">
+        <label class="slider"><span data-i18n="brightness"></span><input data-adj="brightness" type="range" min="-60" max="60" step="1"><output></output></label>
+        <label class="slider"><span data-i18n="contrast"></span><input data-adj="contrast" type="range" min="-50" max="50" step="1"><output></output></label>
+        <label class="slider"><span data-i18n="saturation"></span><input data-adj="saturation" type="range" min="-100" max="60" step="1"><output></output></label>
+        <label class="slider"><span data-i18n="warmth"></span><input data-adj="warmth" type="range" min="-40" max="40" step="1"><output></output></label>
+        <label class="slider"><span data-i18n="sharpen"></span><input data-adj="sharpen" type="range" min="0" max="100" step="1"><output></output></label>
+        <div class="row">
+          <label class="switch"><input id="tGray" type="checkbox"><span data-i18n="grayscale"></span></label>
+          <button id="btnEnhance" class="btn small" data-i18n="autoEnhance"></button>
+          <button id="btnResetAdj" class="btn small ghost" data-i18n="reset"></button>
+        </div>
+      </div>
+      <div class="panel" data-panel="check">
+        <ul id="checkList" class="check-list"></ul>
+      </div>
+    </div>
+    <div class="bottom-bar">
+      <button id="btnToExport" class="btn primary wide"><span data-i18n="next"></span> →</button>
+    </div>
+  </section>
+
+  <!-- EXPORT -->
+  <section id="screen-export" class="screen">
+    <h2 data-i18n="exportTitle"></h2>
+    <div class="export-grid">
+      <figure class="card">
+        <figcaption data-i18n="singlePhoto"></figcaption>
+        <img id="exPhoto" alt="">
+        <div class="meta" id="exPhotoMeta"></div>
+      </figure>
+      <figure class="card">
+        <figcaption data-i18n="printSheet"></figcaption>
+        <img id="exSheet" alt="" class="sheet-img">
+        <div class="meta" id="exSheetMeta"></div>
+      </figure>
+    </div>
+    <div class="card form">
+      <label><span data-i18n="dpi"></span>
+        <select id="oDpi"><option value="300">300 dpi</option><option value="600">600 dpi</option></select></label>
+      <label><span data-i18n="paper"></span><select id="oPaper"></select></label>
+      <label><span data-i18n="gap"></span><input id="oGap" type="number" min="0" max="10" step="0.5" inputmode="decimal"></label>
+      <label><span data-i18n="count"></span><select id="oCount"></select></label>
+      <label class="switch"><input id="oCut" type="checkbox" checked><span data-i18n="cutLines"></span></label>
+    </div>
+    <div class="export-actions">
+      <button id="bShare" class="btn primary"><span>⤴</span> <span data-i18n="share"></span></button>
+      <button id="bPhotoJpg" class="btn"><span>⬇</span> <span data-i18n="dlJpg"></span></button>
+      <button id="bSheetJpg" class="btn"><span>⬇</span> <span data-i18n="dlSheetJpg"></span></button>
+      <button id="bSheetPdf" class="btn"><span>⬇</span> <span data-i18n="dlSheetPdf"></span></button>
+      <button id="bPrint" class="btn"><span>🖨</span> <span data-i18n="print"></span></button>
+    </div>
+    <p class="hint" data-i18n="printHint"></p>
+    <button id="bNew" class="btn ghost wide" data-i18n="newPhoto"></button>
+  </section>
+
+  <!-- VERLAUF -->
+  <section id="screen-history" class="screen">
+    <h2 data-i18n="history"></h2>
+    <div id="historyList" class="history-list"></div>
+    <p id="historyEmpty" class="hint center" data-i18n="historyEmpty" hidden></p>
+  </section>
+</main>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p></div>
+<div id="toast" class="toast" role="status"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
